@@ -1,0 +1,416 @@
+## This is a basic workflow to help you get started with Actions
+
+## Warning:                                                      The following GitHub Secrets must be configured for this GitHub Action to work
+##          AWS_ACCESS_KEYPAIR, AWS_SECRET_ACCESS_KEY, AWS_ACCESS_KEY_ID
+##          AWS_DEFAULT_ACCOUNT, AWS_DEFAULT_PROFILE, AWS_DEFAULT_REGION
+##          AWS_DEPLOY_TERRAFORM, AWS_DESTROY_TERRAFORM, INSPECT_DEPLOYMENT
+
+## aws --profile ${AWS_DEFAULT_PROFILE} \
+##     --region ${AWS_DEFAULT_REGION} \
+##     sts assume-role \
+##     --role-arn arn:aws:iam::${AWS_DEFAULT_ACCOUNT}:role/${DEVOPS_TRUST_POLICY} \
+##     --role-session-name "TerraformPipeline" \
+## {
+##     "Credentials": {
+##         "AccessKeyId": "***",
+##         "SecretAccessKey": "***",
+##         "SessionToken": "***",
+##         "Expiration": "2020-08-16T04:54:47+00:00"
+##     },
+##     "AssumedRoleUser": {
+##         "AssumedRoleId": "***:TerraformPipeline",
+##         "Arn": "arn:aws:sts::***:assumed-role/${DEVOPS_TRUST_POLICY}/TerraformPipeline"
+##     }
+## }
+
+name: GitHub Actions - Terraform
+
+on:
+
+  workflow_dispatch:
+    name: 'Manual Deployment'
+    description: 'Triggering Manual Deployment'
+    inputs:
+      workspace:
+        description: 'Target Workspace'
+        required: false
+        default: 'dev'
+      region:
+        description: 'Target Region'
+        required: false
+        default: '?'
+      account:
+        description: 'Target Account'
+        required: false
+        default: '?'
+      accesskey:
+        description: 'Access Key-ID'
+        required: false
+        default: '?'
+      secretkey:
+        description: 'Secret Access-Key'
+        required: false
+        default: '?'
+      logLevel:
+        description: 'Log level'
+        required: true
+        default: 'warning'
+      tags:
+        description: 'Deploy Terraform'
+
+  push:
+    branches: [ master ]
+##    paths-ignore:
+##      - '.github/**'
+##      - '*.md'
+    paths:
+      - workspace
+      # - '*.tf'
+      # - '*.tfvars'
+
+jobs:
+
+  validate:
+
+    env:
+
+      terraform_deploy: ${{ secrets.AWS_DEPLOY_TERRAFORM }}
+      terraform_destroy: ${{ secrets.AWS_DESTROY_TERRAFORM }}
+      terraform_tfstate: ${GITHUB_WORKSPACE}/terraform.tfstate.d
+      terraform_planfile: terraform
+
+      inspect_deployment: ${{ secrets.INSPECT_DEPLOYMENT }}
+
+      update_system: ${{ secrets.UPDATE_SYSTEM_LATEST }}
+      update_python: ${{ secrets.UPDATE_PYTHON_LATEST }}
+
+      AWS_DEFAULT_PROFILE: default
+      AWS_DEFAULT_ACCOUNT: ${{ secrets.AWS_DEFAULT_ACCOUNT }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      DEVOPS_TRUST_POLICY: ${{ secrets.DEVOPS_TRUST_POLICY }}
+
+    ## The type of runner that the job will run on
+    ## self-hosted runners seem to be limited queued one/run at a time
+    runs-on: ubuntu-latest
+
+    ## Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+
+    ## Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v2
+
+    ## Environment Variables
+    - name: Exporting Variables
+      id: export_variables
+      run: |
+        eval "echo '::set-env name=AWS_SHARED_CREDENTIALS_FILE::${GITHUB_WORKSPACE}/access/credentials'";
+        echo '::set-env name=DEVOPS_TRUST_POLICY::${{ env.DEVOPS_TRUST_POLICY }}';
+        echo '::set-env name=AWS_DEFAULT_PROFILE::${{ env.AWS_DEFAULT_PROFILE }}';
+        echo '::set-env name=AWS_DEFAULT_REGION::${{ secrets.AWS_DEFAULT_REGION }}';
+
+    ## Environment Variables
+    - name: Environment Variables
+      id: environment_variables
+      run: |
+        target_workspace="${{ github.event.inputs.workspace }}";
+        if [[ (${#target_workspace} -eq 0) || (${target_workspace} == '?') ]]; then
+          target_workspace="$(cat ${GITHUB_WORKSPACE}/workspace | grep -vxE '[[:blank:]]*([#;].*)?' | tr -d "[:space:]")";
+          echo "Target Workspace [file-based]: '${target_workspace}'";
+          eval "echo '::set-env name=TARGET_WORKSPACE::${target_workspace}'";
+        fi;
+        cloud_region="${{ github.event.inputs.region }}";
+        if [[ (${#cloud_region} -gt 0 ) && (${cloud_region} != '?') ]]; then
+          echo "Cloud Region [input-based]: '${cloud_region}'";
+          eval "echo '::set-env name=AWS_DEFAULT_REGION::${cloud_region}'";
+        fi;
+        cloud_account="${{ github.event.inputs.account }}";
+        if [[ (${#cloud_account} -gt 0 ) && (${cloud_account} != '?') ]]; then
+          echo "Cloud Account [input-based]: '${cloud_account}'";
+          eval "echo '::set-env name=AWS_DEFAULT_ACCOUNT::${cloud_account}'";
+        fi;
+        access_keyid="${{ github.event.inputs.accesskey }}";
+        if [[ (${#access_keyid} -gt 0 ) && (${access_keyid} != '?') ]]; then
+          echo "Access Key-ID [input-based]: '${access_keyid}'";
+          eval "echo '::set-env name=AWS_ACCESS_KEY_ID::${access_keyid}'";
+        fi;
+        secret_keyid="${{ github.event.inputs.secretkey }}";
+        if [[ (${#secret_keyid} -gt 0 ) && (${secret_keyidid} != '?') ]]; then
+          echo "Secret Key-ID [input-based]: '${secret_keyid}'";
+          eval "echo '::set-env name=AWS_SECRET_ACCESS_KEY::${secret_keyid}'";
+        fi;
+
+    ## Operating System
+    - name: Operating System
+      if: env.update_system == 'true'
+      id: operating_system
+      run: |
+        sudo apt-get update -y;
+        sudo apt-get install -y lsb-release;
+        lsb_release -a;
+
+    ## Upgrading Python
+    - name: Upgrading Python
+      if: env.update_python == 'true'
+      id: upgrade_python
+      run: |
+        ## python --version; ## Python 2.7
+        cd /usr/bin;
+        sudo ln -fs python3.6 python;
+        python --version;
+
+    ## Installing Toolset
+    - name: Installing Toolset
+      id: intall_toolset
+      run: |
+        sudo apt-get install -y jq tree;
+
+    ## Updating AWS CLI (latest)
+    - name: Updating AWS CLI (lastest)
+      id: update_awscli
+      env:
+        awscli_download: awscli.amazonaws.com
+        awscli_platform: linux-x86_64
+        awscli_package: awscli-exe-linux-x86_64.zip
+      run: |
+        aws --version >/dev/null 2>&1 && {
+            echo -e >&2 "AWS CLI is Installed ... Ok! ";
+            aws --version;
+          };
+        ## https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2-linux.html
+        cd /tmp;
+        wget --quiet "https://${{ env.awscli_download }}/${{ env.awscli_package }}" \
+             --directory-prefix=/tmp/ --output-document=awscliv2.zip;
+        unzip awscliv2.zip 1>/dev/null;
+        ls -l /usr/local/bin/aws;
+        sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update;
+        aws --version;
+
+    ## Inspecting AWS CLI Version
+    - name: Inpsecting AWS CLI Version
+      id: inspect_awscli
+      run: |
+        aws --version;
+
+    ## General Credentials
+    - name: Generate Credentials
+      id: generate_credentials
+      ## if: env.terraform_deploy == 'true' && env.inspect_deployment == 'true'
+      run: |
+        echo "AWS Default Region: ${AWS_DEFAULT_REGION}";
+        echo "Credentials File: ${AWS_SHARED_CREDENTIALS_FILE}";
+        declare -a credentials=(
+            aws_access_key_id~${AWS_ACCESS_KEY_ID}
+            aws_secret_access_key~${AWS_SECRET_ACCESS_KEY}
+          );
+        for credential in ${credentials[@]}; do
+          sed -i -e "s|^\(${credential%\~*}\)\( =\)\(.*\)$|\1\2 ${credential#*\~}|g" ${AWS_SHARED_CREDENTIALS_FILE} ;
+        done;
+        declare -a session_token=($(
+            aws --profile ${AWS_DEFAULT_PROFILE} \
+                --region ${AWS_DEFAULT_REGION} \
+                sts assume-role \
+                --role-arn arn:aws:iam::${AWS_DEFAULT_ACCOUNT}:role/${DEVOPS_TRUST_POLICY} \
+                --role-session-name "TerraformPipeline" \
+                --query 'Credentials.{aki:AccessKeyId,sak:SecretAccessKey,stk:SessionToken,sts:Expiration}' \
+                --output text
+             ));
+        declare -a session_items=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_TOKEN_EXPIRES);
+        counter=0; for xkey in "${session_token[@]}"; do
+          ##eval "export ${session_items[$((counter++))]}=${xkey}";
+          eval "echo '::set-env name=${session_items[$((counter++))]}::${xkey}'";
+        done;
+
+    ## DevOps Assume-Role
+    - name: DevOps Assume-Role
+      id: devops_assumerole
+      ## if: env.terraform_deploy == 'true' && env.inspect_deployment == 'true'
+      run: |
+        declare -a credentials=(
+            aws_access_key_id~${AWS_ACCESS_KEY_ID}
+            aws_secret_access_key~${AWS_SECRET_ACCESS_KEY}
+            aws_session_token~${AWS_SESSION_TOKEN}
+            x_principal_arn~arn:aws:iam::${AWS_DEFAULT_ACCOUNT}:user/terraform
+            x_security_token_expires~${AWS_TOKEN_EXPIRES}
+          );
+        for credential in ${credentials[@]}; do
+          sed -i -e "s|^\(${credential%\~*}\)\( =\)\(.*\)$|\1\2 ${credential#*\~}|g" ${AWS_SHARED_CREDENTIALS_FILE} ;
+        done;
+
+    ## Display Environment
+    - name: Display Environment
+      id: display_environment
+      if: env.terraform_deploy == 'true' && env.display_environment == 'true'
+      run: |
+        echo "Terraform Workspace: [ ${TARGET_WORKSPACE} ]! ";
+        echo "Terraform Cloud-Region: [ ${AWS_DEFAULT_REGION} ]! ";
+        echo "AWS Target Account: ${AWS_DEFAULT_ACCOUNT}"
+        echo "AWS Access Key-ID: ${AWS_ACCESS_KEY_ID}";
+        echo "AWS Secret Access Key: ${AWS_SECRET_ACCESS_KEY}";
+        echo "AWS Session Token: ${AWS_SESSION_TOKEN}";
+
+    ## Validating AWS CLI
+    - name: Validating AWS CLI
+      id: validate_awscli
+      ## if: env.terraform_deploy == 'true' && env.inspect_deployment == 'true'
+      run: |
+        cat ${AWS_SHARED_CREDENTIALS_FILE} ;
+        aws configure list;
+        aws --profile ${AWS_DEFAULT_PROFILE} \
+            --region ${AWS_DEFAULT_REGION} \
+            iam list-users;
+
+    ## Downloading Terraform
+    - name: Downloading Terraform
+      id: download_terraform
+      env:
+        terraform_version: 0.12.29
+        terraform_download: releases.hashicorp.com/terraform
+        terraform_platform: linux_amd64
+        terraform_package: terraform_${{ env.terraform_version }}_${{ env.terraform_platform }}.zip
+      run:                                                       |
+        terraform --version >/dev/null 2>&1 && {
+            echo -e >&2 "HashiCorp Terraform is Installed ... Ok! ";
+            which terraform;
+          } || {
+            wget --quiet https://${{ env.terraform_download }}/${{ env.terraform_version }}/${{ env.terraform_package }} -P /tmp/;
+            unzip /tmp/${{ env.terraform_package }};
+            chmod 0754 ./terraform;
+            sudo mv ./terraform /usr/local/bin/;
+          };
+
+    ## Inspecting Terraform Version
+    - name: Inpsecting Terraform Version
+      id: inspect_tterraform
+      run: |
+        terraform --version;
+
+    ## Initializing Terraform
+    - name: Initializing Terraform
+      id: initialize_terraform
+      run: |
+        terraform init;
+
+    ## Terraform Workspace
+    - name: Terraform Workspace
+      id: terraform_workspace
+      run: |
+        terraform workspace new ${TARGET_WORKSPACE};
+
+    ## Checks that all Terraform configuration files adhere to a canonical format
+    - name: Terraform Formatting-Check
+      id: terraform_formatting
+      run: |
+        TF_LOG=TRACE terraform fmt -check;
+
+    ## Validating & Testing Terraform
+    - name: Validating & Testing Terraform
+      id: validate_terraform
+      run: |
+        terraform validate;
+
+    ## ## Generating Terraform Plan
+    - name: Generating Terraform Plan
+      id: generate_tfplan
+      run: |
+        terraform_tfplan="${{ env.terraform_tfstate }}/${TARGET_WORKSPACE}/${{ env.terraform_planfile }}.tfplan";
+        echo "Terraform Output Plan:                             ${terraform_tfplan}";
+        export TF_VAR_region="${AWS_DEFAULT_REGION}";
+        terraform plan -out "${terraform_tfplan}";
+
+    ## Applying Terraform Plan
+    - name: Applying Terraform Plan
+      id: apply_tfplan
+      env:
+        awscli_keypair: ${GITHUB_WORKSPACE}/access/keypair
+      if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request' && env.terraform_deploy == 'true'
+      run: |
+        echo -en "${{ secrets.AWS_ACCESS_KEYPAIR }}" > ${{ env.awscli_keypair }};
+        ls -al ${{ env.awscli_keypair }};
+        terraform_tfplan="${{ env.terraform_tfstate }}/${TARGET_WORKSPACE}/${{ env.terraform_planfile }}.tfplan";
+        echo "Terraform Input Plan: ${terraform_tfplan}";
+        export TF_VAR_region="${AWS_DEFAULT_REGION}";
+        terraform apply -input=false ${terraform_tfplan};
+
+    ## Inspecting Elastic LoadBalancer
+    - name: Inspecting Elastic LoadBalancer
+      id: inspect_awselb
+      if: env.terraform_deploy == 'true' && env.inspect_deployment == 'true'
+      run: |
+        paused=5; while [[
+            `aws --profile ${AWS_DEFAULT_PROFILE} \
+                 --region ${AWS_DEFAULT_REGION} \
+                 elb describe-instance-health \
+                 --load-balancer-name ${TARGET_WORKSPACE}-nginx-elb-$(terraform output resources_index) \
+                 --query InstanceStates[].State \
+                 --output text \
+             | sed -e 's/InService//g' -e 's/\([[:blank:]]\)\{1,\}//' \
+             | egrep -c 'OutOfService' 2>/dev/null` -gt 0
+          ]]; do
+          sleep ${paused};
+        done; ## sleep ${paused};
+        ## curl --silent --head $(
+        ##     aws --profile ${AWS_DEFAULT_PROFILE} \
+        ##         --region ${AWS_DEFAULT_REGION} \
+        ##         elb describe-load-balancers \
+        ##         --load-balancer-name ${TARGET_WORKSPACE}-nginx-elb-$(terraform output resources_index) \
+        ##         --query 'LoadBalancerDescriptions[].DNSName' \
+        ##         --output text
+        ##   ) 2>/dev/null;
+
+    ## Describing Elastic LoadBalancer
+    - name: Describing Elastic LoadBalancer
+      id: describe_awselb
+      if: env.terraform_deploy == 'true' && env.inspect_deployment == 'true'
+      run: |
+        aws --profile ${AWS_DEFAULT_PROFILE} \
+            --region ${AWS_DEFAULT_REGION} \
+            elb describe-load-balancers \
+            --load-balancer-name ${TARGET_WORKSPACE}-nginx-elb-$(terraform output resources_index);
+
+    ## Displaying Terraform Configuration
+    - name: Displaying Terraform Configuration
+      id: display_terraform
+      if: env.terraform_deploy == 'true'
+      run: |
+        terraform show | tee ${{ env.terraform_tfstate }}/${TARGET_WORKSPACE}/terraform.show;
+
+    ## Uploading Terraform Plan
+    - name: Uploading Terraform Plan
+      id: upload_terraform
+      env:
+        terraform_s3bucket: terraform-states-${AWS_DEFAULT_ACCOUNT}
+      if: env.terraform_deploy == 'true' && env.inspect_deployment == 'true'
+      run: |
+        target_tfstate="${{ env.terraform_tfstate }}/${TARGET_WORKSPACE}";
+        target_buildset="${target_tfstate}/build-$(terraform output resources_index)";
+        mkdir -pv ${target_buildset};
+        cp -v ${target_tfstate}/{*.tfstate,*.show,*.tfplan} ${target_buildset}/ 2>/dev/null;
+        s3bucket_remotepath="${TARGET_WORKSPACE}/build-$(terraform output resources_index)";
+        aws --profile ${AWS_DEFAULT_PROFILE} \
+            --region ${AWS_DEFAULT_REGION} \
+            s3 cp ${target_buildset} s3://${{ env.terraform_s3bucket }}/${s3bucket_remotepath}/ \
+            --recursive &>/dev/null ;
+        echo -e "Listing Terraform State components ...";
+        aws --profile ${AWS_DEFAULT_PROFILE} \
+            --region ${AWS_DEFAULT_REGION} \
+            s3 ls s3://${{ env.terraform_s3bucket }} \
+            --recursive ;
+
+    ## Listing Terraform System State
+    - name: Listing Terraform System State
+      id: terraform_state
+      ## if: env.terraform_deploy == 'true' && env.inspect_deployment == 'true'
+      run: |
+        tree ${{ env.terraform_tfstate }};
+        cat $(find ${{ env.terraform_tfstate }} -type f -name terraform.tfstate | head -n1);
+
+    ## Destroying Terraform Plan
+    - name: Destroying Terraform Plan
+      id: destroy_terraform
+      if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request' && env.terraform_deploy == 'true' && env.terraform_destroy == 'true'
+      run: |
+        export TF_VAR_region="${AWS_DEFAULT_REGION}";
+        terraform destroy -auto-approve;
